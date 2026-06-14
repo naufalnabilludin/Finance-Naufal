@@ -1,5 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -12,23 +10,24 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Input required' });
     }
 
-    const anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    });
+    // Untuk sekarang: manual parsing (tanpa AI)
+    // Format: "kategori nominal" e.g. "makan 20000"
+    const parts = input.trim().split(/\s+/);
+    const amount = parseInt(parts[parts.length - 1]);
+    const description = parts.slice(0, -1).join(' ');
 
-    const message = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 150,
-      messages: [{
-        role: 'user',
-        content: `Parse: ${input}. Return JSON: {amount, description, category}`
-      }]
-    });
+    if (!amount || isNaN(amount)) {
+      return res.status(400).json({ error: 'Format: kategori nominal (e.g: makan 20000)' });
+    }
 
-    const text = message.content[0].text;
-    res.status(200).json({ parsed: text });
+    res.status(200).json({ 
+      parsed: JSON.stringify({
+        amount,
+        description: description || 'Transaksi',
+        category: 'Lain-lain'
+      })
+    });
   } catch (error) {
-    console.error('Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 }
