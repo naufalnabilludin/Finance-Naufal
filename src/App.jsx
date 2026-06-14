@@ -100,31 +100,28 @@ async function dbDelete(store, id) {
 //  AI PARSER
 // ════════════════════════════════════════════════════════════
 async function parseWithAI(text, type) {
-  const cats = type === "expense"
-    ? Object.keys(EXPENSE_CATEGORIES).join(", ")
-    : Object.keys(INCOME_CATEGORIES).join(", ");
-  const examples = type === "expense"
-    ? `"beli nasi goreng 15rb" → {"amount":15000,"description":"Nasi goreng","category":"Makan & Minum"}
-"langganan Claude 385rb" → {"amount":385000,"description":"Langganan Claude","category":"Langganan Claude 🤖"}
-"bayar internet 100rb" → {"amount":100000,"description":"Internet","category":"Internet"}`
-    : `"honor pelatihan 750rb" → {"amount":750000,"description":"Honor pelatihan","category":"Honorarium"}
-"uang KPK 260rb" → {"amount":260000,"description":"Uang kegiatan KPK","category":"Komunitas"}`;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6", max_tokens: 1000,
-        messages: [{ role: "user", content:
-          `Parser keuangan. Tipe: ${type}. User: "${text}"
-Balas HANYA JSON: {"amount":<angka>,"description":"<desk>","category":"<dari: ${cats}>"}
-Contoh:\n${examples}\nJika gagal: {"amount":0,"description":"","category":"Lain-lain"}` }],
-      }),
+    const response = await fetch('/api/parseTransaction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: text })
     });
-    const data = await res.json();
-    const raw = data.content?.find(b => b.type === "text")?.text || "{}";
-    return JSON.parse(raw.replace(/```json|```/g, "").trim());
-  } catch {
-    return { amount: 0, description: text, category: "Lain-lain" };
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const parsed = JSON.parse(data.parsed);
+
+    return {
+      amount: parsed.amount,
+      description: parsed.description,
+      category: parsed.category || 'Lain-lain'
+    };
+  } catch (error) {
+    console.error('Parse error:', error);
+    throw error;
   }
 }
 
