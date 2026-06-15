@@ -2,6 +2,44 @@ import { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { db, ref, onValue, push, remove } from './firebase';
 
+const styles = {
+  container: { minHeight: '100vh', background: 'linear-gradient(135deg, #f0fdf4 0%, #f0fdfa 50%, #f0f9ff 100%)' },
+  navbar: { background: '#fff', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', position: 'sticky', top: 0, zIndex: 40 },
+  navbarInner: { maxWidth: '1400px', margin: '0 auto', padding: '1rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  title: { fontSize: '2rem', fontWeight: 'bold', background: 'linear-gradient(to right, #16a34a, #14b8a6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' },
+  buttonGroup: { display: 'flex', gap: '0.5rem' },
+  button: (active) => ({
+    padding: '0.5rem 1.5rem',
+    borderRadius: '0.5rem',
+    fontWeight: '600',
+    border: 'none',
+    cursor: 'pointer',
+    transition: 'all 0.3s',
+    background: active ? 'linear-gradient(to right, #22c55e, #14b8a6)' : '#f3f4f6',
+    color: active ? '#fff' : '#374151'
+  }),
+  main: { maxWidth: '1400px', margin: '0 auto', padding: '2rem 1rem' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem', marginBottom: '2rem' },
+  card: (gradient) => ({
+    background: gradient,
+    color: '#fff',
+    borderRadius: '1rem',
+    padding: '1.5rem',
+    boxShadow: '0 10px 25px rgba(0,0,0,0.1)'
+  }),
+  cardText: { fontSize: '0.875rem', opacity: 0.9, fontWeight: '600' },
+  cardValue: { fontSize: '1.875rem', fontWeight: 'bold', marginTop: '0.5rem' },
+  chartContainer: { background: '#fff', borderRadius: '1rem', padding: '1.5rem', boxShadow: '0 10px 25px rgba(0,0,0,0.1)' },
+  chartTitle: { fontWeight: 'bold', fontSize: '1.125rem', marginBottom: '1rem', color: '#1f2937' },
+  filterButtons: { background: '#fff', borderRadius: '1rem', padding: '1.5rem', boxShadow: '0 10px 25px rgba(0,0,0,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  addButton: { background: 'linear-gradient(to right, #22c55e, #14b8a6)', color: '#fff', padding: '0.75rem 2rem', borderRadius: '1rem', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '1.125rem' },
+  modal: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '1rem' },
+  modalContent: { background: '#fff', borderRadius: '1.5rem', padding: '2rem', width: '100%', maxWidth: '28rem', boxShadow: '0 25px 50px rgba(0,0,0,0.2)' },
+  input: { width: '100%', borderRadius: '0.5rem', padding: '0.75rem', border: '2px solid #d1d5db', marginBottom: '1rem', fontWeight: '500' },
+  transactionList: { background: '#fff', borderRadius: '1rem', padding: '1.5rem', boxShadow: '0 10px 25px rgba(0,0,0,0.1)' },
+  transactionItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'linear-gradient(to right, #f9fafb, #f3f4f6)', borderRadius: '0.5rem', marginBottom: '0.75rem', borderLeft: '4px solid #16a34a' },
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('spending');
   const [transaksi, setTransaksi] = useState([]);
@@ -23,7 +61,6 @@ export default function App() {
     'Lain-lain': 0
   };
 
-  // Firebase listeners
   useEffect(() => {
     const txRef = ref(db, 'transaksi');
     const unsubscribe = onValue(txRef, (snap) => {
@@ -113,66 +150,53 @@ export default function App() {
   const COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE'];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 via-teal-50 to-blue-50">
-      {/* Navbar */}
-      <nav className="bg-white shadow-md sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-4 py-4">
-          <div className="flex justify-between items-center">
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-green-600 to-teal-600 bg-clip-text text-transparent">
-              💰 Keuangan Naufal
-            </h1>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setActiveTab('spending')}
-                className={`px-6 py-2 rounded-lg font-semibold transition ${activeTab === 'spending' ? 'bg-gradient-to-r from-green-500 to-teal-500 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
-              >
-                🧾 Pengeluaran
-              </button>
-              <button
-                onClick={() => setActiveTab('asset')}
-                className={`px-6 py-2 rounded-lg font-semibold transition ${activeTab === 'asset' ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
-              >
-                💎 Aset
-              </button>
-            </div>
+    <div style={styles.container}>
+      <nav style={styles.navbar}>
+        <div style={styles.navbarInner}>
+          <h1 style={styles.title}>💰 Keuangan Naufal</h1>
+          <div style={styles.buttonGroup}>
+            <button style={styles.button(activeTab === 'spending')} onClick={() => setActiveTab('spending')}>
+              🧾 Pengeluaran
+            </button>
+            <button style={styles.button(activeTab === 'asset')} onClick={() => setActiveTab('asset')}>
+              💎 Aset
+            </button>
           </div>
         </div>
       </nav>
 
-      <div className="max-w-6xl mx-auto px-4 py-8">
+      <div style={styles.main}>
         {activeTab === 'spending' && (
-          <div className="space-y-6">
-            {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-gradient-to-br from-green-400 to-emerald-600 text-white rounded-xl p-6 shadow-lg">
-                <p className="text-sm opacity-90 font-semibold">Sisa Anggaran</p>
-                <p className="text-3xl font-bold mt-2">Rp{remaining.toLocaleString('id')}</p>
-                <div className="mt-4 w-full bg-white/20 rounded-full h-2">
-                  <div className="bg-white h-2 rounded-full" style={{ width: `${Math.min(percentUsed, 100)}%` }}></div>
+          <div>
+            <div style={styles.grid}>
+              <div style={styles.card('linear-gradient(135deg, #86efac 0%, #6ee7b7 100%)')}>
+                <div style={styles.cardText}>Sisa Anggaran</div>
+                <div style={styles.cardValue}>Rp{remaining.toLocaleString('id')}</div>
+                <div style={{ marginTop: '1rem', width: '100%', background: 'rgba(255,255,255,0.2)', borderRadius: '0.25rem', height: '0.5rem' }}>
+                  <div style={{ background: '#fff', height: '0.5rem', borderRadius: '0.25rem', width: `${Math.min(percentUsed, 100)}%` }}></div>
                 </div>
-                <p className="text-xs mt-2 opacity-80">{percentUsed.toFixed(1)}% terpakai</p>
+                <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', opacity: 0.8 }}>{percentUsed.toFixed(1)}% terpakai</div>
               </div>
 
-              <div className="bg-gradient-to-br from-blue-400 to-cyan-600 text-white rounded-xl p-6 shadow-lg">
-                <p className="text-sm opacity-90 font-semibold">Anggaran Awal</p>
-                <p className="text-3xl font-bold mt-2">Rp{totalBudget.toLocaleString('id')}</p>
+              <div style={styles.card('linear-gradient(135deg, #60a5fa 0%, #06b6d4 100%)')}>
+                <div style={styles.cardText}>Anggaran Awal</div>
+                <div style={styles.cardValue}>Rp{totalBudget.toLocaleString('id')}</div>
               </div>
 
-              <div className="bg-gradient-to-br from-red-400 to-pink-600 text-white rounded-xl p-6 shadow-lg">
-                <p className="text-sm opacity-90 font-semibold">Pengeluaran</p>
-                <p className="text-3xl font-bold mt-2">-Rp{totalSpent.toLocaleString('id')}</p>
+              <div style={styles.card('linear-gradient(135deg, #f87171 0%, #fb7185 100%)')}>
+                <div style={styles.cardText}>Pengeluaran</div>
+                <div style={styles.cardValue}>-Rp{totalSpent.toLocaleString('id')}</div>
               </div>
 
-              <div className="bg-gradient-to-br from-yellow-400 to-orange-600 text-white rounded-xl p-6 shadow-lg">
-                <p className="text-sm opacity-90 font-semibold">Pemasukan</p>
-                <p className="text-3xl font-bold mt-2">+Rp{totalIncome.toLocaleString('id')}</p>
+              <div style={styles.card('linear-gradient(135deg, #fbbf24 0%, #f97316 100%)')}>
+                <div style={styles.cardText}>Pemasukan</div>
+                <div style={styles.cardValue}>+Rp{totalIncome.toLocaleString('id')}</div>
               </div>
             </div>
 
-            {/* Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white rounded-xl p-6 shadow-lg">
-                <h3 className="font-bold text-lg mb-4 text-gray-800">Distribusi Pengeluaran</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(500px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+              <div style={styles.chartContainer}>
+                <div style={styles.chartTitle}>Distribusi Pengeluaran</div>
                 {categoryData.length > 0 ? (
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
@@ -185,19 +209,15 @@ export default function App() {
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="h-80 flex items-center justify-center text-gray-400">Belum ada data pengeluaran</div>
+                  <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>Belum ada data pengeluaran</div>
                 )}
               </div>
 
-              <div className="bg-white rounded-xl p-6 shadow-lg">
-                <h3 className="font-bold text-lg mb-4 text-gray-800">Anggaran vs Pengeluaran</h3>
+              <div style={styles.chartContainer}>
+                <div style={styles.chartTitle}>Anggaran vs Pengeluaran</div>
                 {Object.keys(budget).length > 0 ? (
                   <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={Object.entries(budget).map(([cat, budg]) => ({
-                      category: cat.split(' ')[0],
-                      budget: budg,
-                      pengeluaran: spendByCategory[cat] || 0
-                    }))}>
+                    <BarChart data={Object.entries(budget).map(([cat, budg]) => ({ category: cat.split(' ')[0], budget: budg, pengeluaran: spendByCategory[cat] || 0 }))}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="category" fontSize={11} />
                       <YAxis fontSize={11} />
@@ -208,83 +228,63 @@ export default function App() {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="h-80 flex items-center justify-center text-gray-400">Loading chart...</div>
+                  <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>Loading...</div>
                 )}
               </div>
             </div>
 
-            {/* Filter & Button */}
-            <div className="bg-white rounded-xl p-6 shadow-lg flex justify-between items-center">
-              <div className="flex gap-2 flex-wrap">
+            <div style={styles.filterButtons}>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 {[7, 14, 30].map(days => (
-                  <button
-                    key={days}
-                    onClick={() => setFilterDays(days)}
-                    className={`px-4 py-2 rounded-lg font-semibold transition ${filterDays === days ? 'bg-gradient-to-r from-green-500 to-teal-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
-                  >
+                  <button key={days} style={{ ...styles.button(filterDays === days), padding: '0.5rem 1rem', fontSize: '0.875rem' }} onClick={() => setFilterDays(days)}>
                     {days} hari
                   </button>
                 ))}
               </div>
-              <button
-                onClick={() => { setShowModal(true); setInputValue(''); }}
-                className="bg-gradient-to-r from-green-500 to-teal-500 text-white px-8 py-3 rounded-xl hover:shadow-lg transition font-bold text-lg"
-              >
+              <button style={styles.addButton} onClick={() => { setShowModal(true); setInputValue(''); }}>
                 ➕ Tambah
               </button>
             </div>
 
-            {/* Modal */}
             {showModal && (
-              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-2xl">
-                  <h2 className="text-2xl font-bold mb-6 text-gray-800">Catat Transaksi</h2>
-                  <div className="space-y-4">
-                    <select value={inputType} onChange={(e) => setInputType(e.target.value)} className="w-full border-2 border-gray-300 p-3 rounded-lg focus:border-green-500 focus:outline-none font-semibold">
-                      <option>Pengeluaran</option>
-                      <option>Pemasukan</option>
-                    </select>
-                    <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="w-full border-2 border-gray-300 p-3 rounded-lg focus:border-green-500 focus:outline-none" />
-                    <div>
-                      <input type="text" placeholder="kategori nominal (e.g: makan 50000)" value={inputValue} onChange={(e) => setInputValue(e.target.value)} className="w-full border-2 border-gray-300 p-3 rounded-lg focus:border-green-500 focus:outline-none" />
-                      <p className="text-xs text-gray-500 mt-2">Contoh: makan 50000</p>
-                    </div>
-                    <div className="flex gap-3 pt-4">
-                      <button onClick={handleAddTransaksi} className="flex-1 bg-gradient-to-r from-green-500 to-teal-500 text-white px-4 py-3 rounded-lg hover:shadow-lg transition font-bold">
-                        Simpan
-                      </button>
-                      <button onClick={() => setShowModal(false)} className="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg hover:bg-gray-400 transition font-bold">
-                        Batal
-                      </button>
-                    </div>
+              <div style={styles.modal} onClick={() => setShowModal(false)}>
+                <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+                  <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#1f2937' }}>Catat Transaksi</h2>
+                  <select value={inputType} onChange={(e) => setInputType(e.target.value)} style={styles.input}>
+                    <option>Pengeluaran</option>
+                    <option>Pemasukan</option>
+                  </select>
+                  <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={styles.input} />
+                  <input type="text" placeholder="kategori nominal (e.g: makan 50000)" value={inputValue} onChange={(e) => setInputValue(e.target.value)} style={styles.input} />
+                  <p style={{ fontSize: '0.75rem', color: '#999', marginBottom: '1rem' }}>Contoh: makan 50000</p>
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <button onClick={handleAddTransaksi} style={{ ...styles.addButton, flex: 1 }}>Simpan</button>
+                    <button onClick={() => setShowModal(false)} style={{ ...styles.addButton, background: '#ccc', color: '#333', flex: 1 }}>Batal</button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Transaksi List */}
-            <div className="bg-white rounded-xl p-6 shadow-lg">
-              <h3 className="font-bold text-lg mb-4 text-gray-800">Transaksi Terbaru</h3>
-              <div className="space-y-3 max-h-96 overflow-y-auto">
+            <div style={styles.transactionList}>
+              <div style={styles.chartTitle}>Transaksi Terbaru</div>
+              <div style={{ maxHeight: '24rem', overflowY: 'auto' }}>
                 {transaksi.length > 0 ? (
                   transaksi.map((tx) => (
-                    <div key={tx.id} className="flex justify-between items-center p-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg hover:shadow-md transition border-l-4 border-green-500">
-                      <div className="flex-1">
-                        <p className="font-bold text-gray-800">{tx.deskripsi}</p>
-                        <p className="text-sm text-gray-500">{tx.tanggal} • {tx.kategori}</p>
+                    <div key={tx.id} style={styles.transactionItem}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 'bold', color: '#1f2937' }}>{tx.deskripsi}</div>
+                        <div style={{ fontSize: '0.875rem', color: '#999' }}>{tx.tanggal} • {tx.kategori}</div>
                       </div>
-                      <div className="flex items-center gap-4">
-                        <p className={`font-bold text-lg ${tx.tipe === 'Pengeluaran' ? 'text-red-600' : 'text-green-600'}`}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <div style={{ fontWeight: 'bold', fontSize: '1.125rem', color: tx.tipe === 'Pengeluaran' ? '#dc2626' : '#16a34a' }}>
                           {tx.tipe === 'Pengeluaran' ? '−' : '+'}Rp{tx.nominal.toLocaleString('id')}
-                        </p>
-                        <button onClick={() => handleDelete(tx.id)} className="text-red-500 hover:text-red-700 hover:bg-red-100 p-2 rounded-lg transition">
-                          🗑️
-                        </button>
+                        </div>
+                        <button onClick={() => handleDelete(tx.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem' }}>🗑️</button>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <div className="text-center py-8 text-gray-400">Belum ada transaksi</div>
+                  <div style={{ textAlign: 'center', padding: '2rem', color: '#999' }}>Belum ada transaksi</div>
                 )}
               </div>
             </div>
@@ -292,16 +292,16 @@ export default function App() {
         )}
 
         {activeTab === 'asset' && (
-          <div className="space-y-6">
-            <div className="bg-gradient-to-br from-blue-500 to-purple-600 text-white rounded-xl p-8 shadow-lg">
-              <p className="text-sm opacity-90 font-semibold">Total Aset</p>
-              <p className="text-5xl font-bold mt-4">Rp{totalAsset.toLocaleString('id')}</p>
+          <div>
+            <div style={styles.card('linear-gradient(135deg, #3b82f6 0%, #a855f7 100%)')}>
+              <div style={styles.cardText}>Total Aset</div>
+              <div style={{ fontSize: '3rem', fontWeight: 'bold', marginTop: '1rem' }}>Rp{totalAsset.toLocaleString('id')}</div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div style={{ ...styles.grid, marginTop: '2rem' }}>
               {Object.entries(aset).map(([key, value]) => (
-                <div key={key} className="bg-white rounded-xl p-6 shadow-lg hover:shadow-xl transition border-t-4 border-blue-500">
-                  <p className="text-gray-600 text-sm font-semibold">📊 {key}</p>
-                  <p className="text-3xl font-bold text-gray-800 mt-3">Rp{value.toLocaleString('id')}</p>
+                <div key={key} style={{ ...styles.chartContainer, borderTop: '4px solid #3b82f6' }}>
+                  <div style={{ color: '#666', fontSize: '0.875rem', fontWeight: '600' }}>📊 {key}</div>
+                  <div style={{ fontSize: '1.875rem', fontWeight: 'bold', color: '#1f2937', marginTop: '0.75rem' }}>Rp{value.toLocaleString('id')}</div>
                 </div>
               ))}
             </div>
