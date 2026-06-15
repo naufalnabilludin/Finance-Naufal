@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { PieChart, Pie, Cell, ResponsiveContainer, AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import { db, ref, onValue, push, set, remove } from "./firebase";
+import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { db, ref, onValue, set, remove } from "./firebase";
 
 // ════════════════════════════════════════════════════════════
 //  CONFIG & CONSTANTS
@@ -38,20 +38,62 @@ const DONUT_COLORS = ["#E8A838", "#A8D8C0", "#88C4A8", "#5B8DB8", "#E8895A", "#9
 //  HELPERS
 // ════════════════════════════════════════════════════════════
 const fmt = (n) => "Rp" + Number(Math.round(n)).toLocaleString("id-ID");
-const fmtShort = (n) => {
-  const abs = Math.abs(n);
-  if (abs >= 1000000) return "Rp" + (n / 1000000).toFixed(1).replace(".0", "") + "jt";
-  if (abs >= 1000) return "Rp" + Math.round(n / 1000) + "rb";
-  return "Rp" + n;
-};
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const thisMonth = () => todayStr().slice(0, 7);
-const dateLabel = (d) => d === todayStr() ? "Hari Ini"
-  : new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+const dateLabel = (d) => {
+  const today = todayStr();
+  const yest = new Date(new Date().setDate(new Date().getDate() - 1)).toISOString().slice(0, 10);
+  if (d === today) return "Hari Ini";
+  if (d === yest) return "Kemarin";
+  return new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+};
 const monthLabel = () => new Date().toLocaleDateString("id-ID", { month: "long", year: "numeric" });
 
 // ════════════════════════════════════════════════════════════
-//  SEED DATA (data awal Naufal)
+//  MANUAL PARSER (replace AI parser)
+// ════════════════════════════════════════════════════════════
+function parseTransaction(text, type) {
+  const lower = text.toLowerCase();
+  const parts = text.trim().split(/\s+/);
+  
+  // Find amount (last numeric or "Xrb" / "Xjt" pattern)
+  let amount = 0;
+  let amountStr = "";
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i].toLowerCase().replace(/[.,]/g, '');
+    if (p.match(/^\d+rb$/)) { amount = parseInt(p.replace('rb', '')) * 1000; amountStr = parts[i]; break; }
+    if (p.match(/^\d+jt$/)) { amount = parseInt(p.replace('jt', '')) * 1000000; amountStr = parts[i]; break; }
+    if (p.match(/^\d+k$/))  { amount = parseInt(p.replace('k', ''))  * 1000; amountStr = parts[i]; break; }
+    if (p.match(/^\d+$/))   { amount = parseInt(p); amountStr = parts[i]; break; }
+  }
+  
+  if (!amount) return { amount: 0, description: text, category: "Lain-lain" };
+  
+  const description = text.replace(amountStr, "").trim() || "Transaksi";
+  
+  // Auto-categorize
+  let category = "Lain-lain";
+  const cats = type === "expense" ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+  
+  if (type === "expense") {
+    if (lower.match(/makan|minum|nasi|kopi|jajan|sarapan|lunch|dinner|gofood|grab.*food|traktir/)) category = "Makan & Minum";
+    else if (lower.match(/transport|grab|gojek|bensin|parkir|ojek|bus|taxi/)) category = "Transport";
+    else if (lower.match(/obat|dokter|klinik|halodoc|kesehatan|vitamin|rs/)) category = "Kesehatan";
+    else if (lower.match(/buku|literasi|baca|novel|perpus/)) category = "Literasi & Buku";
+    else if (lower.match(/claude|langganan ai|chatgpt|api/)) category = "Langganan Claude 🤖";
+    else if (lower.match(/internet|wifi|kuota|paket data/)) category = "Internet";
+  } else {
+    if (lower.match(/honor|gaji|fee|pelatihan/)) category = "Honorarium";
+    else if (lower.match(/project|proyek|freelance|klien/)) category = "Project";
+    else if (lower.match(/beasiswa|stipend/)) category = "Beasiswa";
+    else if (lower.match(/komunitas|kpk|rumah dunia|auditorium/)) category = "Komunitas";
+  }
+  
+  return { amount, description, category };
+}
+
+// ════════════════════════════════════════════════════════════
+//  SEED DATA
 // ════════════════════════════════════════════════════════════
 const SEED_EXPENSES = [
   { id: 1013, date: "2026-06-13", amount: 28000,  description: "Konsul Halodoc", category: "Kesehatan" },
@@ -79,42 +121,6 @@ const SEED_ASSETS = [
 ];
 
 // ════════════════════════════════════════════════════════════
-//  AI PARSER (with fallback manual parsing)
-// ════════════════════════════════════════════════════════════
-async function parseWithAI(text, type) {
-  const cats = type === "expense"
-    ? Object.keys(EXPENSE_CATEGORIES).join(", ")
-    : Object.keys(INCOME_CATEGORIES).join(", ");
-  const examples = type === "expense"
-    ? `"beli nasi goreng 15rb" → {"amount":15000,"description":"Nasi goreng","category":"Makan & Minum"}
-"langganan Claude 385rb" → {"amount":385000,"description":"Langganan Claude","category":"Langganan Claude 🤖"}
-"bayar internet 100rb" → {"amount":100000,"description":"Internet","category":"Internet"}`
-    : `"honor pelatihan 750rb" → {"amount":750000,"description":"Honor pelatihan","category":"Honorarium"}
-"uang KPK 260rb" → {"amount":260000,"description":"Uang kegiatan KPK","category":"Komunitas"}`;
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6", max_tokens: 1000,
-        messages: [{ role: "user", content:
-          `Parser keuangan. Tipe: ${type}. User: "${text}"
-Balas HANYA JSON: {"amount":<angka>,"description":"<desk>","category":"<dari: ${cats}>"}
-Contoh:\n${examples}\nJika gagal: {"amount":0,"description":"","category":"Lain-lain"}` }],
-      }),
-    });
-    const data = await res.json();
-    const raw = data.content?.find(b => b.type === "text")?.text || "{}";
-    return JSON.parse(raw.replace(/```json|```/g, "").trim());
-  } catch {
-    // Fallback: manual parse (format: "kategori nominal")
-    const parts = text.trim().split(/\s+/);
-    const amount = parseInt(parts[parts.length - 1]);
-    if (!amount || isNaN(amount)) return { amount: 0, description: text, category: "Lain-lain" };
-    return { amount, description: parts.slice(0, -1).join(" ") || text, category: "Lain-lain" };
-  }
-}
-
-// ════════════════════════════════════════════════════════════
 //  MAIN APP
 // ════════════════════════════════════════════════════════════
 export default function App() {
@@ -124,63 +130,59 @@ export default function App() {
   const [incomes, setIncomes] = useState([]);
   const [assets, setAssets] = useState([]);
 
-  useEffect(() => { bootstrap(); }, []);
+  useEffect(() => {
+    let mounted = true;
+    let loadedExp = false, loadedInc = false, loadedAst = false;
+    
+    const checkReady = () => {
+      if (loadedExp && loadedInc && loadedAst && mounted) setReady(true);
+    };
 
-  async function bootstrap() {
-    try {
-      // Setup Firebase listeners
-      const expRef = ref(db, 'expenses');
-      const incRef = ref(db, 'incomes');
-      const astRef = ref(db, 'assets');
+    // Expenses listener
+    const expRef = ref(db, 'expenses');
+    onValue(expRef, async (snap) => {
+      if (snap.exists()) {
+        const list = Object.values(snap.val()).sort((a, b) => b.id - a.id);
+        if (mounted) setExpenses(list);
+      } else {
+        // Seed once
+        for (const e of SEED_EXPENSES) await set(ref(db, `expenses/${e.id}`), e);
+        if (mounted) setExpenses(SEED_EXPENSES);
+      }
+      loadedExp = true;
+      checkReady();
+    });
 
-      // Check if Firebase has data, if not seed it
-      onValue(expRef, async (snap) => {
-        if (snap.exists()) {
-          const data = snap.val();
-          const list = Object.entries(data).map(([, v]) => v).sort((a, b) => b.id - a.id);
-          setExpenses(list);
-        } else {
-          // Seed expenses
-          for (const e of SEED_EXPENSES) {
-            await set(ref(db, `expenses/${e.id}`), e);
-          }
-          setExpenses(SEED_EXPENSES);
-        }
-        setReady(true);
-      });
+    // Incomes listener
+    const incRef = ref(db, 'incomes');
+    onValue(incRef, async (snap) => {
+      if (snap.exists()) {
+        const list = Object.values(snap.val()).sort((a, b) => b.id - a.id);
+        if (mounted) setIncomes(list);
+      } else {
+        for (const i of SEED_INCOMES) await set(ref(db, `incomes/${i.id}`), i);
+        if (mounted) setIncomes(SEED_INCOMES);
+      }
+      loadedInc = true;
+      checkReady();
+    });
 
-      onValue(incRef, async (snap) => {
-        if (snap.exists()) {
-          const data = snap.val();
-          const list = Object.entries(data).map(([, v]) => v).sort((a, b) => b.id - a.id);
-          setIncomes(list);
-        } else {
-          // Seed incomes
-          for (const i of SEED_INCOMES) {
-            await set(ref(db, `incomes/${i.id}`), i);
-          }
-          setIncomes(SEED_INCOMES);
-        }
-      });
+    // Assets listener
+    const astRef = ref(db, 'assets');
+    onValue(astRef, async (snap) => {
+      if (snap.exists()) {
+        const list = Object.values(snap.val()).sort((a, b) => a.id - b.id);
+        if (mounted) setAssets(list);
+      } else {
+        for (const a of SEED_ASSETS) await set(ref(db, `assets/${a.id}`), a);
+        if (mounted) setAssets(SEED_ASSETS);
+      }
+      loadedAst = true;
+      checkReady();
+    });
 
-      onValue(astRef, async (snap) => {
-        if (snap.exists()) {
-          const data = snap.val();
-          const list = Object.entries(data).map(([, v]) => v).sort((a, b) => a.id - b.id);
-          setAssets(list);
-        } else {
-          // Seed assets
-          for (const a of SEED_ASSETS) {
-            await set(ref(db, `assets/${a.id}`), a);
-          }
-          setAssets(SEED_ASSETS);
-        }
-      });
-    } catch (e) {
-      console.error("Bootstrap error:", e);
-      setReady(true);
-    }
-  }
+    return () => { mounted = false; };
+  }, []);
 
   if (!ready) {
     return <div style={{ minHeight: "100vh", background: "#EEF2ED", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter',system-ui,sans-serif", color: "#88928A" }}>
@@ -192,8 +194,8 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: "#EEF2ED", fontFamily: "'Inter',system-ui,sans-serif", paddingBottom: 72 }}>
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "16px 16px 0" }}>
         {page === "spending"
-          ? <SpendingPage expenses={expenses} incomes={incomes} setExpenses={setExpenses} setIncomes={setIncomes} />
-          : <AssetPage assets={assets} setAssets={setAssets} />}
+          ? <SpendingPage expenses={expenses} incomes={incomes} />
+          : <AssetPage assets={assets} />}
       </div>
       <BottomNav page={page} setPage={setPage} />
     </div>
@@ -205,6 +207,84 @@ export default function App() {
 // ════════════════════════════════════════════════════════════
 const card = { background: "white", borderRadius: 18, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.03)" };
 const sectionTitle = { fontSize: 12, fontWeight: 700, color: "#7A857C", letterSpacing: 1, textTransform: "uppercase" };
+const addBtnStyle = { background: "#EEF2ED", border: "none", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, color: "#3A9B6E", cursor: "pointer" };
+
+function AssetEditModal({ asset, onChange, onSave, onDelete, onClose }) {
+  const isQty = asset.type === "emas" || asset.type === "saham";
+  const isDebt = asset.type === "hutang";
+  const isCash = asset.type === "cash";
+  const typeLabel = ASSET_TYPES[asset.type].label;
+  const num = (v) => parseInt(String(v).replace(/\D/g, "")) || 0;
+  const numFloat = (v) => parseFloat(String(v).replace(/[^\d.]/g, "")) || 0;
+
+  const lbl = { fontSize: 12, color: "#7A857C", fontWeight: 600, display: "block", marginBottom: 4 };
+  const inp = { width: "100%", border: "1.5px solid #E2E6E0", borderRadius: 9, padding: "9px 12px", fontSize: 14, marginBottom: 12, outline: "none", boxSizing: "border-box" };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "white", borderRadius: 20, padding: 22, width: "100%", maxWidth: 400, maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#1a2b22", marginBottom: 4 }}>
+          {asset.isNew ? `Tambah ${typeLabel}` : `Edit ${asset.nama || typeLabel}`}
+        </div>
+        <div style={{ fontSize: 12, color: "#9AA39B", marginBottom: 16 }}>{ASSET_TYPES[asset.type].icon} {typeLabel}</div>
+
+        <label style={lbl}>Nama Aset</label>
+        <input value={asset.nama} onChange={e => onChange({ ...asset, nama: e.target.value })} placeholder={isQty ? "Contoh: BBRI, Emas Digital" : "Contoh: Deposito Krom"} style={inp} />
+
+        {isQty && (
+          <>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={lbl}>Jumlah ({asset.unit})</label>
+                <input value={asset.qty} onChange={e => onChange({ ...asset, qty: numFloat(e.target.value) })} style={inp} />
+              </div>
+              <div style={{ width: 90 }}>
+                <label style={lbl}>Satuan</label>
+                <input value={asset.unit} onChange={e => onChange({ ...asset, unit: e.target.value })} style={inp} />
+              </div>
+            </div>
+            <label style={lbl}>Harga Rata-rata Beli (per {asset.unit})</label>
+            <input value={asset.beli} onChange={e => onChange({ ...asset, beli: num(e.target.value) })} style={inp} />
+            <label style={lbl}>Harga Sekarang (per {asset.unit})</label>
+            <input value={asset.now} onChange={e => onChange({ ...asset, now: num(e.target.value) })} style={inp} />
+
+            <div style={{ background: "#F7F9F6", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                <span style={{ color: "#7A857C" }}>Nilai sekarang</span>
+                <span style={{ fontWeight: 700 }}>{fmt(asset.qty * asset.now)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "#7A857C" }}>Return</span>
+                <span style={{ fontWeight: 700, color: asset.now >= asset.beli ? "#2D7D4A" : "#C0392B" }}>
+                  {asset.beli ? (((asset.now - asset.beli) / asset.beli) * 100).toFixed(2) : "0"}%
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+
+        {(isCash || isDebt) && (
+          <>
+            <label style={lbl}>{isDebt ? "Sisa Hutang (Rp)" : "Nilai / Saldo (Rp)"}</label>
+            <input value={asset.now} onChange={e => onChange({ ...asset, now: num(e.target.value), beli: num(e.target.value) })} style={inp} />
+            <label style={lbl}>Keterangan</label>
+            <input value={asset.ket} onChange={e => onChange({ ...asset, ket: e.target.value })} placeholder={isDebt ? "Contoh: Cicilan, jatuh tempo..." : "Contoh: Saldo rekening utama"} style={inp} />
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+          {!asset.isNew && (
+            <button onClick={() => onDelete(asset.id)} style={{ padding: "11px 14px", borderRadius: 10, border: "1.5px solid #F0D0CC", background: "white", color: "#C0392B", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>🗑️</button>
+          )}
+          <button onClick={onClose} style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E6E0", background: "white", color: "#6a756e", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Batal</button>
+          <button onClick={() => onSave({ id: asset.id, type: asset.type, nama: asset.nama, qty: asset.qty, unit: asset.unit, beli: asset.beli, now: asset.now, ket: asset.ket })}
+            disabled={!asset.nama}
+            style={{ flex: 1, padding: "11px", borderRadius: 10, border: "none", background: asset.nama ? "#1F4D38" : "#ccc", color: "white", fontSize: 14, fontWeight: 700, cursor: asset.nama ? "pointer" : "not-allowed" }}>Simpan</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function BottomNav({ page, setPage }) {
   return (
@@ -219,7 +299,7 @@ function BottomNav({ page, setPage }) {
   );
 }
 
-function Donut({ data, total }) {
+function Donut({ data }) {
   return (
     <div style={{ width: 150, height: 150, flexShrink: 0 }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -234,9 +314,10 @@ function Donut({ data, total }) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  SPENDING PAGE
+//  SPENDING PAGE — with Date Selector
 // ════════════════════════════════════════════════════════════
-function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
+function SpendingPage({ expenses, incomes }) {
+  const [viewDate, setViewDate] = useState(todayStr()); // ← NEW: Date selector state
   const [showInput, setShowInput] = useState(false);
   const [inputText, setInputText] = useState("");
   const [inputDate, setInputDate] = useState(todayStr());
@@ -244,6 +325,8 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [showAllTx, setShowAllTx] = useState(false);
+  const [editTx, setEditTx] = useState(null);
+  const [trendDays, setTrendDays] = useState(30);
 
   const m = thisMonth();
   const monthExp = expenses.filter(e => e.date.startsWith(m));
@@ -254,16 +337,33 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
   const budgetLeft = BUDGET_AWAL - totalExp;
   const pctBudget = Math.min((totalExp / BUDGET_AWAL) * 100, 100);
 
+  // ════ DATE-SPECIFIC CALCULATIONS (based on viewDate) ════
+  const expUpToDate = expenses.filter(e => e.date <= viewDate && e.date.startsWith(m));
+  const incUpToDate = incomes.filter(e => e.date <= viewDate && e.date.startsWith(m));
+  const totalExpUpToDate = expUpToDate.reduce((s, e) => s + e.amount, 0);
+  const totalIncUpToDate = incUpToDate.reduce((s, e) => s + e.amount, 0);
+  const sisaUpToDate = BUDGET_AWAL + totalIncUpToDate - totalExpUpToDate;
+  
+  // Daily transactions (transaksi hanya tanggal yang dipilih)
+  const dayExp = expenses.filter(e => e.date === viewDate);
+  const dayInc = incomes.filter(e => e.date === viewDate);
+  const dayExpTotal = dayExp.reduce((s, e) => s + e.amount, 0);
+  const dayIncTotal = dayInc.reduce((s, e) => s + e.amount, 0);
+
   const byCat = {};
   monthExp.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount; });
 
   const distData = Object.entries(byCat).map(([cat, val]) => ({ name: cat, value: val })).sort((a, b) => b.value - a.value);
 
+  const trendCutoff = new Date();
+  trendCutoff.setDate(trendCutoff.getDate() - (trendDays - 1));
+  const trendCutoffStr = trendCutoff.toISOString().slice(0, 10);
   const dailyMap = {};
-  monthExp.forEach(e => { dailyMap[e.date] = (dailyMap[e.date] || 0) + e.amount; });
+  expenses.filter(e => e.date >= trendCutoffStr).forEach(e => { dailyMap[e.date] = (dailyMap[e.date] || 0) + e.amount; });
   const trendData = Object.entries(dailyMap).sort((a, b) => a[0].localeCompare(b[0]))
     .map(([d, v]) => ({ day: new Date(d).getDate(), value: v }));
-  const avgDaily = trendData.length ? totalExp / trendData.length : 0;
+  const trendTotal = Object.values(dailyMap).reduce((s, v) => s + v, 0);
+  const avgDaily = trendData.length ? trendTotal / trendData.length : 0;
   const maxDaily = trendData.length ? Math.max(...trendData.map(t => t.value)) : 0;
 
   const allTx = [
@@ -272,42 +372,45 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
   ].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
   const shownTx = showAllTx ? allTx : allTx.slice(0, 4);
 
+  // ════ FIREBASE OPERATIONS ════
   async function handleAdd() {
     if (!inputText.trim()) return;
     setLoading(true); setFeedback(null);
     try {
-      const p = await parseWithAI(inputText, inputType);
-      if (!p.amount || p.amount <= 0) { setFeedback({ ok: false, msg: "Nominal gak kebaca. Coba: 'makan 20rb'" }); setLoading(false); return; }
+      const p = parseTransaction(inputText, inputType);
+      if (!p.amount || p.amount <= 0) { setFeedback({ ok: false, msg: "Nominal gak kebaca. Coba: 'makan 20000' atau 'makan 20rb'" }); setLoading(false); return; }
       const entry = { id: Date.now(), date: inputDate, amount: p.amount, description: p.description, category: p.category };
-      
-      // Save to Firebase
       const storeType = inputType === "expense" ? "expenses" : "incomes";
       await set(ref(db, `${storeType}/${entry.id}`), entry);
-      
-      // Update local state
-      if (inputType === "expense") setExpenses(prev => [entry, ...prev]);
-      else setIncomes(prev => [entry, ...prev]);
-      
       setInputText("");
       setFeedback({ ok: true, msg: `✅ ${p.description} — ${fmt(p.amount)}` });
-    } catch { setFeedback({ ok: false, msg: "Gagal. Coba lagi." }); }
+    } catch (e) { setFeedback({ ok: false, msg: "Gagal. Coba lagi." }); }
     setLoading(false);
   }
 
   async function handleDelete(id, type) {
     const storeType = type === "expense" ? "expenses" : "incomes";
     await remove(ref(db, `${storeType}/${id}`));
-    
-    if (type === "expense") setExpenses(prev => prev.filter(e => e.id !== id));
-    else setIncomes(prev => prev.filter(e => e.id !== id));
+  }
+
+  async function handleSaveEdit(updated, type) {
+    const storeType = type === "expense" ? "expenses" : "incomes";
+    await set(ref(db, `${storeType}/${updated.id}`), updated);
+    setEditTx(null);
   }
 
   const envelopeCats = Object.entries(EXPENSE_CATEGORIES).filter(([, info]) => info.budget > 0);
 
+  // Quick date buttons
+  const quickDates = [
+    { label: "Hari Ini", value: todayStr() },
+    { label: "Kemarin", value: new Date(new Date().setDate(new Date().getDate() - 1)).toISOString().slice(0, 10) },
+  ];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* TITLE */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 4, flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 32 }}>🧾</span>
           <div>
@@ -318,17 +421,45 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
         <div style={{ ...card, padding: "10px 16px", fontSize: 13, fontWeight: 600, color: "#3a4540" }}>📅 {monthLabel()}</div>
       </div>
 
-      {/* HERO */}
+      {/* ════ DATE SELECTOR (C + A) ════ */}
+      <div style={{ ...card, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#7A857C" }}>Lihat tanggal:</span>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {quickDates.map(q => (
+            <button key={q.label} onClick={() => setViewDate(q.value)}
+              style={{ padding: "6px 12px", borderRadius: 8, border: "none",
+                background: viewDate === q.value ? "#1F4D38" : "#F0F2EF",
+                color: viewDate === q.value ? "white" : "#6a756e",
+                fontWeight: viewDate === q.value ? 700 : 500, fontSize: 12, cursor: "pointer" }}>
+              {q.label}
+            </button>
+          ))}
+          <input type="date" value={viewDate} max={todayStr()} onChange={e => setViewDate(e.target.value)}
+            style={{ border: "1.5px solid #E2E6E0", borderRadius: 8, padding: "5px 10px", fontSize: 13, background: "#FAFBFA", cursor: "pointer", fontWeight: 500 }} />
+        </div>
+        {viewDate !== todayStr() && (
+          <button onClick={() => setViewDate(todayStr())}
+            style={{ marginLeft: "auto", background: "none", border: "none", color: "#3A9B6E", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            ↻ Reset
+          </button>
+        )}
+      </div>
+
+      {/* HERO - DYNAMIC (based on viewDate) */}
       <div style={{ background: "linear-gradient(150deg,#1F4D38 0%,#2D6347 100%)", borderRadius: 22, padding: 24, color: "white", position: "relative", overflow: "hidden" }}>
-        <div style={{ fontSize: 12, opacity: 0.7, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>Ringkasan Spending</div>
-        <div style={{ fontSize: 13, opacity: 0.85 }}>Sisa uang bulan ini</div>
-        <div style={{ fontSize: 40, fontWeight: 800, letterSpacing: -1, margin: "2px 0 18px" }}>{fmt(sisaReal)}</div>
+        <div style={{ fontSize: 12, opacity: 0.7, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>
+          Ringkasan {viewDate === todayStr() ? "Bulan Ini" : `s/d ${dateLabel(viewDate)}`}
+        </div>
+        <div style={{ fontSize: 13, opacity: 0.85 }}>
+          Sisa uang {viewDate === todayStr() ? "bulan ini" : dateLabel(viewDate)}
+        </div>
+        <div style={{ fontSize: 40, fontWeight: 800, letterSpacing: -1, margin: "2px 0 18px" }}>{fmt(sisaUpToDate)}</div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 20, marginBottom: 18 }}>
           {[["💳", "Budget Awal", fmt(BUDGET_AWAL), "white"],
-            ["⬆️", "Pemasukan", "+" + fmt(totalInc), "#A8F0C6"],
-            ["⬇️", "Pengeluaran", "-" + fmt(totalExp), "#FFC4C4"],
-            ["🎯", "vs Budget Plan", (budgetLeft >= 0 ? "+" : "") + fmt(budgetLeft), budgetLeft >= 0 ? "#A8F0C6" : "#FFC4C4"]].map(([ic, l, v, c]) => (
+            ["⬆️", "Pemasukan", "+" + fmt(totalIncUpToDate), "#A8F0C6"],
+            ["⬇️", "Pengeluaran", "-" + fmt(totalExpUpToDate), "#FFC4C4"],
+            ["🎯", "vs Budget Plan", (BUDGET_AWAL - totalExpUpToDate >= 0 ? "+" : "") + fmt(BUDGET_AWAL - totalExpUpToDate), BUDGET_AWAL - totalExpUpToDate >= 0 ? "#A8F0C6" : "#FFC4C4"]].map(([ic, l, v, c]) => (
             <div key={l}>
               <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 2 }}>{ic} {l}</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: c }}>{v}</div>
@@ -336,22 +467,43 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
           ))}
         </div>
 
-        {/* Progress */}
+        {/* Transaksi hari yang dipilih */}
         <div style={{ background: "rgba(255,255,255,0.97)", borderRadius: 14, padding: "14px 16px", color: "#1a2b22" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: "#7A857C", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+            Transaksi {dateLabel(viewDate)}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-around", textAlign: "center" }}>
             <div>
-              <div style={{ fontSize: 12, color: "#7A857C" }}>Realisasi Pengeluaran</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{fmt(totalExp)}</div>
-              <div style={{ fontSize: 11, color: "#4A9B7F", fontWeight: 600 }}>{pctBudget.toFixed(1)}% dari budget</div>
+              <div style={{ fontSize: 11, color: "#7A857C" }}>Pengeluaran</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: "#C0392B" }}>{fmt(dayExpTotal)}</div>
             </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, color: "#7A857C" }}>Sisa Budget</div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: budgetLeft >= 0 ? "#2D7D4A" : "#C0392B" }}>{fmt(budgetLeft)}</div>
+            <div>
+              <div style={{ fontSize: 11, color: "#7A857C" }}>Pemasukan</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: "#2D7D4A" }}>{fmt(dayIncTotal)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#7A857C" }}>Net</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: (dayIncTotal - dayExpTotal) >= 0 ? "#2D7D4A" : "#C0392B" }}>{(dayIncTotal - dayExpTotal) >= 0 ? "+" : ""}{fmt(dayIncTotal - dayExpTotal)}</div>
             </div>
           </div>
-          <div style={{ height: 8, background: "#E8EDE9", borderRadius: 8, position: "relative" }}>
-            <div style={{ height: 8, borderRadius: 8, width: `${pctBudget}%`, background: pctBudget >= 90 ? "#C0392B" : pctBudget >= 70 ? "#E8A838" : "#3A9B6E", transition: "width 0.5s" }} />
+        </div>
+      </div>
+
+      {/* PROGRESS BAR BULANAN */}
+      <div style={card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 12, color: "#7A857C" }}>Realisasi Pengeluaran Bulan Ini</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#1a2b22" }}>{fmt(totalExp)}</div>
+            <div style={{ fontSize: 11, color: "#4A9B7F", fontWeight: 600 }}>{pctBudget.toFixed(1)}% dari budget</div>
           </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 11, color: "#7A857C" }}>Sisa Budget Bulan</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: budgetLeft >= 0 ? "#2D7D4A" : "#C0392B" }}>{fmt(budgetLeft)}</div>
+          </div>
+        </div>
+        <div style={{ height: 10, background: "#E8EDE9", borderRadius: 8 }}>
+          <div style={{ height: 10, borderRadius: 8, width: `${pctBudget}%`, background: pctBudget >= 90 ? "#C0392B" : pctBudget >= 70 ? "#E8A838" : "#3A9B6E", transition: "width 0.5s" }} />
         </div>
       </div>
 
@@ -387,15 +539,14 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
         </div>
       </div>
 
-      {/* DISTRIBUSI + TREND (2 kolom di desktop) */}
+      {/* DISTRIBUSI + TREND */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-        {/* Distribusi donut */}
         <div style={card}>
           <div style={{ ...sectionTitle, marginBottom: 16 }}>Distribusi Pengeluaran</div>
           {distData.length > 0 ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <Donut data={distData} total={totalExp} />
+                <Donut data={distData} />
                 <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: 8 }}>
                   {distData.map((d, i) => (
                     <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
@@ -417,9 +568,15 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
           ) : <div style={{ textAlign: "center", color: "#aab3ab", padding: 30, fontSize: 14 }}>Belum ada pengeluaran bulan ini</div>}
         </div>
 
-        {/* Trend harian */}
         <div style={card}>
-          <div style={{ ...sectionTitle, marginBottom: 16 }}>Trend Pengeluaran Harian</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <span style={sectionTitle}>Trend Pengeluaran</span>
+            <div style={{ display: "flex", gap: 4, background: "#F0F2EF", borderRadius: 9, padding: 3 }}>
+              {[[7, "7 hari"], [14, "14 hari"], [30, "1 bulan"]].map(([d, l]) => (
+                <button key={d} onClick={() => setTrendDays(d)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 12, fontWeight: trendDays === d ? 700 : 500, background: trendDays === d ? "white" : "transparent", color: trendDays === d ? "#1F4D38" : "#9AA39B", cursor: "pointer", boxShadow: trendDays === d ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }}>{l}</button>
+              ))}
+            </div>
+          </div>
           {trendData.length > 0 ? (
             <>
               <div style={{ height: 180 }}>
@@ -444,7 +601,7 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
                 </div>
                 <div>
                   <div style={{ fontSize: 11, color: "#7A857C" }}>Hari aktif</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#2a3530" }}>{trendData.length}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#2a3530" }}>{trendData.length} / {trendDays}</div>
                 </div>
               </div>
             </>
@@ -477,7 +634,10 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
                   <div style={{ fontSize: 14, fontWeight: 700, color: isInc ? "#2D7D4A" : "#C0392B" }}>{isInc ? "+" : "-"}{fmt(tx.amount)}</div>
                   <div style={{ fontSize: 11, color: "#aab3ab" }}>{dateLabel(tx.date)}</div>
                 </div>
-                <button onClick={() => handleDelete(tx.id, tx.type)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ccc", flexShrink: 0 }}>🗑️</button>
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <button onClick={() => setEditTx({ ...tx })} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ccc" }}>✏️</button>
+                  <button onClick={() => handleDelete(tx.id, tx.type)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ccc" }}>🗑️</button>
+                </div>
               </div>
             );
           })}
@@ -485,7 +645,40 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
         </div>
       </div>
 
-      {/* FAB - Catat Transaksi */}
+      {/* EDIT MODAL */}
+      {editTx && (
+        <div onClick={() => setEditTx(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "white", borderRadius: 20, padding: 22, width: "100%", maxWidth: 380 }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#1a2b22", marginBottom: 16 }}>Edit Transaksi</div>
+
+            <label style={{ fontSize: 12, color: "#7A857C", fontWeight: 600 }}>Deskripsi</label>
+            <input value={editTx.description} onChange={e => setEditTx({ ...editTx, description: e.target.value })}
+              style={{ width: "100%", border: "1.5px solid #E2E6E0", borderRadius: 9, padding: "9px 12px", fontSize: 14, marginTop: 4, marginBottom: 12, outline: "none", boxSizing: "border-box" }} />
+
+            <label style={{ fontSize: 12, color: "#7A857C", fontWeight: 600 }}>Nominal</label>
+            <input value={editTx.amount} onChange={e => setEditTx({ ...editTx, amount: parseInt(e.target.value.replace(/\D/g, "")) || 0 })}
+              style={{ width: "100%", border: "1.5px solid #E2E6E0", borderRadius: 9, padding: "9px 12px", fontSize: 14, marginTop: 4, marginBottom: 12, outline: "none", boxSizing: "border-box" }} />
+
+            <label style={{ fontSize: 12, color: "#7A857C", fontWeight: 600 }}>Tanggal</label>
+            <input type="date" value={editTx.date} max={todayStr()} onChange={e => setEditTx({ ...editTx, date: e.target.value })}
+              style={{ width: "100%", border: "1.5px solid #E2E6E0", borderRadius: 9, padding: "9px 12px", fontSize: 14, marginTop: 4, marginBottom: 12, outline: "none", boxSizing: "border-box" }} />
+
+            <label style={{ fontSize: 12, color: "#7A857C", fontWeight: 600 }}>Kategori</label>
+            <select value={editTx.category} onChange={e => setEditTx({ ...editTx, category: e.target.value })}
+              style={{ width: "100%", border: "1.5px solid #E2E6E0", borderRadius: 9, padding: "9px 12px", fontSize: 14, marginTop: 4, marginBottom: 18, outline: "none", boxSizing: "border-box", background: "white" }}>
+              {Object.keys(editTx.type === "expense" ? EXPENSE_CATEGORIES : INCOME_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => setEditTx(null)} style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E6E0", background: "white", color: "#6a756e", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Batal</button>
+              <button onClick={() => handleSaveEdit({ id: editTx.id, date: editTx.date, amount: editTx.amount, description: editTx.description, category: editTx.category }, editTx.type)}
+                style={{ flex: 1, padding: "11px", borderRadius: 10, border: "none", background: "#1F4D38", color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Simpan</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INPUT MODAL */}
       {showInput && (
         <div onClick={() => setShowInput(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "white", borderRadius: "22px 22px 0 0", padding: 22, width: "100%", maxWidth: 480, boxShadow: "0 -4px 24px rgba(0,0,0,0.15)" }}>
@@ -505,11 +698,11 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
             </div>
 
             <div style={{ fontSize: 12, color: "#aab3ab", marginBottom: 8 }}>
-              {inputType === "expense" ? 'Contoh: "beli buku 85rb", "makan siang 25rb"' : 'Contoh: "honor pelatihan 750rb", "uang KPK 260rb"'}
+              {inputType === "expense" ? 'Contoh: "beli buku 85000", "makan 20rb"' : 'Contoh: "honor 750000", "uang KPK 260rb"'}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <input autoFocus value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === "Enter" && !loading && handleAdd()}
-                placeholder={inputType === "expense" ? "beli / bayar / transport..." : "honor / project / beasiswa..."}
+                placeholder={inputType === "expense" ? "deskripsi nominal..." : "deskripsi nominal..."}
                 style={{ flex: 1, border: "1.5px solid #E2E6E0", borderRadius: 11, padding: "12px 14px", fontSize: 15, outline: "none", background: "#FAFBFA" }} />
               <button onClick={handleAdd} disabled={loading || !inputText.trim()} style={{ background: loading ? "#ccc" : inputType === "expense" ? "#C0392B" : "#2D5A3D", color: "white", border: "none", borderRadius: 11, padding: "12px 18px", fontSize: 18, cursor: loading ? "wait" : "pointer" }}>{loading ? "⏳" : "➕"}</button>
             </div>
@@ -526,9 +719,8 @@ function SpendingPage({ expenses, incomes, setExpenses, setIncomes }) {
 // ════════════════════════════════════════════════════════════
 //  ASSET PAGE
 // ════════════════════════════════════════════════════════════
-function AssetPage({ assets, setAssets }) {
-  const [editing, setEditing] = useState(null);
-  const [editNow, setEditNow] = useState("");
+function AssetPage({ assets }) {
+  const [editAsset, setEditAsset] = useState(null);
 
   const emas = assets.filter(a => a.type === "emas");
   const saham = assets.filter(a => a.type === "saham");
@@ -556,13 +748,23 @@ function AssetPage({ assets, setAssets }) {
     ...saham.map(a => ({ name: a.nama, value: nilai(a) })),
   ].sort((a, b) => b.value - a.value);
 
-  async function saveNow(asset) {
-    const val = parseInt(String(editNow).replace(/\D/g, ""));
-    if (!val) { setEditing(null); return; }
-    const updated = { ...asset, now: val };
-    await set(ref(db, `assets/${asset.id}`), updated);
-    setAssets(prev => prev.map(a => a.id === asset.id ? updated : a));
-    setEditing(null); setEditNow("");
+  async function handleSaveAsset(asset) {
+    await set(ref(db, `assets/${asset.id}`), asset);
+    setEditAsset(null);
+  }
+
+  async function handleDeleteAsset(id) {
+    await remove(ref(db, `assets/${id}`));
+    setEditAsset(null);
+  }
+
+  function startAdd(type) {
+    const isQtyAsset = type === "emas" || type === "saham";
+    setEditAsset({
+      id: Date.now(), type, nama: "",
+      qty: isQtyAsset ? 0 : 1, unit: type === "emas" ? "gr" : type === "saham" ? "lbr" : "",
+      beli: 0, now: 0, ket: "", isNew: true,
+    });
   }
 
   function AssetRow({ a, showRet }) {
@@ -575,33 +777,20 @@ function AssetPage({ assets, setAssets }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#2a3530" }}>{a.nama}</div>
           <div style={{ fontSize: 11, color: "#9AA39B" }}>
-            {a.type === "cash" || a.type === "hutang" ? a.ket : `${a.qty} ${a.unit} · avg ${fmt(a.beli)}`}
+            {a.type === "cash" || a.type === "hutang" ? (a.ket || "—") : `${a.qty} ${a.unit} · avg ${fmt(a.beli)} → ${fmt(a.now)}`}
           </div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
-          {editing === a.id ? (
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              <input autoFocus value={editNow} onChange={e => setEditNow(e.target.value)} onKeyDown={e => e.key === "Enter" && saveNow(a)}
-                placeholder="harga skrg" style={{ width: 90, border: "1px solid #ccc", borderRadius: 7, padding: "4px 7px", fontSize: 13 }} />
-              <button onClick={() => saveNow(a)} style={{ background: "#2D5A3D", color: "white", border: "none", borderRadius: 7, padding: "4px 9px", fontSize: 12, cursor: "pointer" }}>✓</button>
-            </div>
-          ) : (
-            <>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#2a3530" }}>{fmt(n)}</div>
-              {showRet && <div style={{ fontSize: 12, fontWeight: 600, color: ret >= 0 ? "#2D7D4A" : "#C0392B" }}>{ret >= 0 ? "+" : ""}{ret.toFixed(2)}%</div>}
-            </>
-          )}
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#2a3530" }}>{fmt(n)}</div>
+          {showRet && <div style={{ fontSize: 12, fontWeight: 600, color: ret >= 0 ? "#2D7D4A" : "#C0392B" }}>{ret >= 0 ? "+" : ""}{ret.toFixed(2)}%</div>}
         </div>
-        {(a.type === "emas" || a.type === "saham") && editing !== a.id && (
-          <button onClick={() => { setEditing(a.id); setEditNow(String(a.now)); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ccc", flexShrink: 0 }} title="Update harga sekarang">✏️</button>
-        )}
+        <button onClick={() => setEditAsset({ ...a })} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ccc", flexShrink: 0 }}>✏️</button>
       </div>
     );
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* TITLE */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 4 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 32 }}>💎</span>
@@ -613,9 +802,7 @@ function AssetPage({ assets, setAssets }) {
         <div style={{ ...card, padding: "10px 16px", fontSize: 13, fontWeight: 600, color: "#3a4540" }}>📅 {dateLabel(todayStr())}</div>
       </div>
 
-      {/* HERO + ALOKASI (2 kolom) */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-        {/* Net Worth */}
         <div style={{ background: "linear-gradient(150deg,#1A3D2C 0%,#27543C 100%)", borderRadius: 22, padding: 24, color: "white" }}>
           <div style={{ fontSize: 12, opacity: 0.7, letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>Net Worth</div>
           <div style={{ fontSize: 13, opacity: 0.8 }}>Total Kekayaan Bersih</div>
@@ -623,11 +810,10 @@ function AssetPage({ assets, setAssets }) {
           <div style={{ fontSize: 13, opacity: 0.85 }}>Total Aset {fmt(totalAset)} − Hutang {fmt(hutangTotal)}</div>
         </div>
 
-        {/* Alokasi */}
         <div style={card}>
           <div style={{ ...sectionTitle, marginBottom: 16 }}>Alokasi Aset</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <Donut data={donutData} total={totalAset} />
+            <Donut data={donutData} />
             <div style={{ flex: 1, minWidth: 150, display: "flex", flexDirection: "column", gap: 7 }}>
               {donutData.map((d, i) => (
                 <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
@@ -641,7 +827,6 @@ function AssetPage({ assets, setAssets }) {
         </div>
       </div>
 
-      {/* 4 SUMMARY CARDS */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
         {[
           { ic: "💛", label: "Nilai Emas", value: fmt(emasNow), sub: `${emasRet >= 0 ? "+" : ""}${emasRet.toFixed(1)}%`, color: emasRet >= 0 ? "#2D7D4A" : "#C0392B", foot: emasRet >= 0 ? "↑ Performa baik" : "↓ Performa turun", footBg: emasRet >= 0 ? "#E8F5EE" : "#FCEEEA" },
@@ -663,30 +848,51 @@ function AssetPage({ assets, setAssets }) {
         ))}
       </div>
 
-      {/* RINCIAN ASET */}
       <div style={card}>
         <div style={{ ...sectionTitle, marginBottom: 8 }}>Rincian Aset</div>
 
-        {emas.length > 0 && <>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#E8A838", marginTop: 14, marginBottom: 2 }}>💛 EMAS</div>
-          {emas.map(a => <AssetRow key={a.id} a={a} showRet />)}
-        </>}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, marginBottom: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#E8A838" }}>💛 EMAS</span>
+          <button onClick={() => startAdd("emas")} style={addBtnStyle}>+ Tambah</button>
+        </div>
+        {emas.map(a => <AssetRow key={a.id} a={a} showRet />)}
 
-        {cash.length > 0 && <>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#4A9B7F", marginTop: 16, marginBottom: 2 }}>🏦 CASH & DEPOSITO</div>
-          {cash.map(a => <AssetRow key={a.id} a={a} showRet={false} />)}
-        </>}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#4A9B7F" }}>🏦 CASH & DEPOSITO</span>
+          <button onClick={() => startAdd("cash")} style={addBtnStyle}>+ Tambah</button>
+        </div>
+        {cash.map(a => <AssetRow key={a.id} a={a} showRet={false} />)}
 
-        {saham.length > 0 && <>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#5B8DB8", marginTop: 16, marginBottom: 2 }}>📈 SAHAM</div>
-          {saham.map(a => <AssetRow key={a.id} a={a} showRet />)}
-          <div style={{ fontSize: 11, color: "#aab3ab", marginTop: 8, fontStyle: "italic" }}>
-            💡 Update harga saham dari Google Finance dengan tap ✏️
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#5B8DB8" }}>📈 SAHAM</span>
+          <button onClick={() => startAdd("saham")} style={addBtnStyle}>+ Tambah</button>
+        </div>
+        {saham.map(a => <AssetRow key={a.id} a={a} showRet />)}
+        {saham.length > 0 && <div style={{ fontSize: 11, color: "#aab3ab", marginTop: 8, fontStyle: "italic" }}>
+          💡 Update harga & lembar saham dari Google Finance dengan tap ✏️
+        </div>}
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#C0392B" }}>💳 HUTANG</span>
+          <button onClick={() => startAdd("hutang")} style={addBtnStyle}>+ Tambah</button>
+        </div>
+        {hutang.map(a => (
+          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: "1px solid #F4F6F3" }}>
+            <div style={{ width: 40, height: 40, borderRadius: 11, background: "#C0392B18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19, flexShrink: 0 }}>💳</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#2a3530" }}>{a.nama}</div>
+              <div style={{ fontSize: 11, color: "#9AA39B" }}>{a.ket || "—"}</div>
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#C0392B", flexShrink: 0 }}>{fmt(a.now)}</div>
+            <button onClick={() => setEditAsset({ ...a })} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ccc", flexShrink: 0 }}>✏️</button>
           </div>
-        </>}
+        ))}
       </div>
 
-      {/* INFO BOX */}
+      {editAsset && (
+        <AssetEditModal asset={editAsset} onChange={setEditAsset} onSave={handleSaveAsset} onDelete={handleDeleteAsset} onClose={() => setEditAsset(null)} />
+      )}
+
       <div style={{ ...card, background: "#FDFBF4", border: "1px solid #F0E8D0" }}>
         <div style={{ fontSize: 13, color: "#8a7a4a", lineHeight: 1.6 }}>
           💡 <strong>Tips:</strong> Saham di-track real-time lebih akurat di Google Finance. Di sini cukup update angka totalnya sesekali (tap ✏️) untuk melihat Net Worth keseluruhan bersama emas, deposito, dan cash.
